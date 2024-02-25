@@ -31,7 +31,11 @@ object Server extends ServerModuleInterface:
     * Hint: you may find the [[Framing]] flows useful.
     */
   val reframedFlow: Flow[ByteString, String, NotUsed] =
-    unimplementedFlow
+    Framing.delimiter(
+      delimiter = ByteString("\n"),
+      maximumFrameLength = 256,
+      allowTruncation = false
+    ).map(_.utf8String)
 
   /**
     * A flow that consumes chunks of bytes and produces [[Event]] messages.
