@@ -10,6 +10,9 @@ import followers.model.{Event, Followers, Identity}
 import scala.collection.immutable.SortedSet
 import scala.concurrent.{ExecutionContext, Future, Promise}
 
+given Ordering[Event] with
+  def compare(a: Event, b: Event) = a.sequenceNr compare b.sequenceNr
+
 /**
   * Utility object that describe stream manipulations used by the server
   * implementation.
@@ -76,7 +79,26 @@ object Server extends ServerModuleInterface:
     * operation around in the operator.
     */
   val reintroduceOrdering: Flow[Event, Event, NotUsed] =
-    unimplementedFlow
+    Flow[Event].statefulMapConcat { () =>
+      var buffer = SortedSet.empty[Event]
+      var nextSeq = 1
+
+      { event =>
+        if event.sequenceNr == nextSeq then
+          nextSeq += 1
+          var events = List(event)
+
+          while buffer.headOption.map(_.sequenceNr) == Some(nextSeq) do
+            events :+= buffer.head
+            buffer = buffer.tail
+            nextSeq += 1
+
+          events
+        else
+          buffer += event
+          List()
+      }
+    }
 
   /**
     * A flow that associates a state of [[Followers]] to
