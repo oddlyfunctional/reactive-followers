@@ -143,12 +143,6 @@ object Server extends ServerModuleInterface:
       case event: Event.StatusUpdate =>
         followers.getOrElse(userId, Set.empty).contains(event.fromUserId)
 
-  // Utilities to temporarily have unimplemented parts of the program
-  private def unimplementedFlow[A, B, C]: Flow[A, B, C] =
-    Flow.fromFunction[A, B](_ => ???).mapMaterializedValue(_ => ??? : C)
-
-  private def unimplementedSink[A, B]: Sink[A, B] = Sink.ignore.mapMaterializedValue(_ => ??? : B)
-
 /**
   * Creates a hub accepting several client connections and a single event connection.
   *
@@ -178,7 +172,7 @@ class Server(using ExecutionContext, Materializer)
       * of the followers Map.
       */
     val incomingDataFlow: Flow[ByteString, (Event, Followers), NotUsed] =
-      unimplementedFlow
+      eventParserFlow.via(reintroduceOrdering).via(followersFlow)
 
     // Wires the MergeHub and the BroadcastHub together and runs the graph
     MergeHub.source[ByteString](256)
@@ -201,7 +195,7 @@ class Server(using ExecutionContext, Materializer)
     * `Flow.fromSinkAndSourceCoupled` to find how to achieve that.
     */
   val eventsFlow: Flow[ByteString, Nothing, NotUsed] =
-    unimplementedFlow
+    Flow.fromSinkAndSourceCoupled(sink = inboundSink, source = Source.never)
 
   /**
     * @return The source of events for the given user
@@ -216,7 +210,10 @@ class Server(using ExecutionContext, Materializer)
     * Status Update:   All current followers of the From User ID should be notified
     */
   def outgoingFlow(userId: Int): Source[ByteString, NotUsed] =
-    ???
+    broadcastOut
+      .filter(isNotified(userId))
+      .map(_._1)
+      .map(_.render)
 
   /**
    * The "final form" of the client flow.
@@ -237,11 +234,12 @@ class Server(using ExecutionContext, Materializer)
    */
   def clientFlow(): Flow[ByteString, ByteString, NotUsed] =
     val clientIdPromise = Promise[Identity]()
-//    clientIdPromise.future.map(id => actorSystem.log.info("Connected follower: {}", id.userId))
 
     // A sink that parses the client identity and completes `clientIdPromise` with it
     val incoming: Sink[ByteString, NotUsed] =
-      ???
+      identityParserSink
+        .mapMaterializedValue(_.foreach(clientIdPromise.success))
+        .mapMaterializedValue(_ => NotUsed)
 
     val outgoing = Source.futureSource(clientIdPromise.future.map { identity =>
       outgoingFlow(identity.userId)
